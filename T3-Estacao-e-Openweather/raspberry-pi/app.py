@@ -10,10 +10,12 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import requests
+import paho.mqtt.client as mqtt
+import json
 
 # ================= CONFIG GERAL =================
 # Coloque sua chave aqui (ou deixe vazio e use a env var OPENWEATHER_API_KEY)
-OPENWEATHER_API_KEY = "SUA_CHAVE_AQUI"
+OPENWEATHER_API_KEY = "f9e5582c8d5c586f5a226916c61195eb"
 
 # Se preferir usar variavel de ambiente, esta linha faz fallback automatico:
 if not OPENWEATHER_API_KEY:
@@ -26,6 +28,15 @@ dht = adafruit_dht.DHT22(DHT_PIN, use_pulseio=False)
 I2C_BUS = 1
 BMP180_ADDR = 0x77
 BMP180_OSS = 1  # 0..3 (maior = mais lento e mais preciso)
+
+# ================= MQTT CONFIG =================
+MQTT_BROKER = "broker.hivemq.com"  # ou o IP do seu servidor MQTT
+MQTT_PORT = 1883
+MQTT_TOPIC = "raspberrypi/estacao"
+
+# Se precisar de autenticacao:
+MQTT_USER = ""
+MQTT_PASS = ""
 
 # ================= DRIVER BMP180 =================
 class BMP180:
@@ -99,7 +110,7 @@ class BMP180:
         press_pa = p + ((x1 + x2 + 3791) >> 4)
 
         return temp_c, press_pa  # C, Pa
-
+        
 # ================= LEITURA DHT ROBUSTA =================
 def ler_dht22(max_tentativas=8, pausa=1.0, min_ok=2):
     vals = []
@@ -127,7 +138,7 @@ def pressao_nivel_mar(p_hpa, temp_c, alt_m):
     T = temp_c + 273.15
     p0 = p_hpa * math.exp((9.80665 * 0.0289644 * alt_m) / (8.3144598 * T))
     return p0
-
+    
 # ================= OPENWEATHER =================
 def fetch_openweather(lat, lon, api_key, timeout=5):
     # OpenWeather: temp C (units=metric), pressao hPa.
@@ -155,6 +166,16 @@ def fetch_openweather(lat, lon, api_key, timeout=5):
 # ================= FUNCOES DE LEITURA =================
 bus = SMBus(I2C_BUS)
 bmp = BMP180(bus)
+
+mqtt_client = mqtt.Client()
+if MQTT_USER:
+    mqtt_client.username_pw_set(MQTT_USER, MQTT_PASS)
+try:
+    mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    mqtt_client.loop_start()
+    print(f"Conectado ao broker MQTT: {MQTT_BROKER}")
+except Exception as e:
+    print(f"Erro ao conectar MQTT: {e}")
 
 def ler_sensores(altitude_m):
     umid, temp_c_dht = ler_dht22()
@@ -260,6 +281,25 @@ if st.button("Ler agora"):
         if i < int(n_amostras) - 1:
             time.sleep(float(pausa_amostras))
     dados = media_de_medicoes(medicoes) if int(n_amostras) > 1 else medicoes[0]
+    # Publicar no MQTT
+    try:
+        payload = {
+            "timestamp": dados["timestamp"].isoformat(),
+            "temp_c": dados["temp_c"],
+            "umid_pct": dados["umid_pct"],
+            "press_hpa": dados["press_hpa"],
+            "press_sl_hpa": dados["press_sl_hpa"],
+            "temp_bmp_c": dados["temp_bmp_c"],
+            "api_temp_c": dados["api_temp_c"],
+            "api_umid_pct": dados["api_umid_pct"],
+            "api_press_hpa": dados["api_press_hpa"],
+            "api_press_sl_hpa": dados["api_press_sl_hpa"],
+        }
+
+        mqtt_client.publish(MQTT_TOPIC, json.dumps(payload))
+        print(f"Publicado no topico MQTT: {MQTT_TOPIC}")
+    except Exception as e:
+        print(f"Erro ao publicar MQTT: {e}")
 
     df = pd.DataFrame([dados])
     st.session_state.historico = pd.concat([st.session_state.historico, df], ignore_index=True)
@@ -304,7 +344,7 @@ with aba1:
             ax2.plot(df.index, df["api_umid_pct"], label="Umidade OpenWeather (%)")
         ax2.set_xlabel("Tempo"); ax2.set_ylabel("%"); ax2.legend()
         st.pyplot(fig2, clear_figure=True)
-
+        
         # --- Pressao (terreno e MSL) ---
         fig3, ax3 = plt.subplots()
         if "press_hpa" in df.columns:
@@ -317,7 +357,7 @@ with aba1:
             ax3.plot(df.index, df["api_press_sl_hpa"], label="Pressao SL OpenWeather (hPa)")
         ax3.set_xlabel("Tempo"); ax3.set_ylabel("hPa"); ax3.legend()
         st.pyplot(fig3, clear_figure=True)
-
+        
 with aba2:
     st.write("Diferenca (Sensor - OpenWeather). Positivo = sensor acima da API.")
     if not hist.empty and hist["api_temp_c"].notna().any():
@@ -361,3 +401,4 @@ with aba3:
         st.download_button("Baixar CSV", csv, "historico.csv", "text/csv")
     else:
         st.write("Sem dados ainda. Clique em Ler agora para registrar uma amostra.")
+
