@@ -16,7 +16,8 @@ source .venv/bin/activate
 streamlit run app.py --server.address 0.0.0.0 --server.port 8501
 
 ## Vídeo
-[Link do Vídeo de Funcionamento](https://youtu.be/h2YQk91owFs)
+- [Link do Vídeo de Funcionamento do T2](https://youtu.be/h2YQk91owFs)
+- [Link do Vídeo de Funcionamento do T2](https://youtu.be/DSKhdbFHg-c)
 
 ## Integrantes
 
